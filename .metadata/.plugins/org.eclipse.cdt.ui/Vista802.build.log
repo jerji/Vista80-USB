@@ -1,0 +1,49 @@
+23:44:21 **** Incremental Build of configuration Release for project Vista802 ****
+make all 
+Building file: ../main.c
+Invoking: AVR Compiler
+avr-gcc -I"/home/angel/eclipse-workspace/Vista802/usbdrv" -Wall -Os -fpack-struct -fshort-enums -ffunction-sections -fdata-sections -std=gnu99 -funsigned-char -funsigned-bitfields -mmcu=attiny4313 -DF_CPU=12000000UL -MMD -MP -MF"main.d" -MT"main.o" -c -o "main.o" "../main.c"
+../main.c: In function ‘usbFunctionSetup’:
+../main.c:335:14: warning: assignment makes integer from pointer without a cast [-Wint-conversion]
+    usbMsgPtr = (void*) &keyboard_report; // we only have this one
+              ^
+../main.c:342:14: warning: assignment makes integer from pointer without a cast [-Wint-conversion]
+    usbMsgPtr = &idleRate;
+              ^
+Finished building: ../main.c
+ 
+Building target: Vista802.elf
+Invoking: AVR C Linker
+avr-gcc -Wl,-Map,Vista802.map -mmcu=attiny4313 -o "Vista802.elf" ./usbdrv/oddebug.o ./usbdrv/usbdrv.o ./usbdrv/usbdrvasm.o  ./main.o   
+Finished building target: Vista802.elf
+ 
+Invoking: AVR Create Extended Listing
+avr-objdump -h -S Vista802.elf  >"Vista802.lss"
+Finished building: Vista802.lss
+ 
+Create Flash image (ihex format)
+avr-objcopy -R .eeprom -R .fuse -R .lock -R .signature -O ihex Vista802.elf  "Vista802.hex"
+Finished building: Vista802.hex
+ 
+Create eeprom image (ihex format)
+avr-objcopy -j .eeprom --no-change-warnings --change-section-lma .eeprom=0 -O ihex Vista802.elf  "Vista802.eep"
+Finished building: Vista802.eep
+ 
+Invoking: Print Size
+avr-size --format=avr --mcu=attiny4313 Vista802.elf
+AVR Memory Usage
+----------------
+Device: attiny4313
+
+Program:    3454 bytes (84.3% Full)
+(.text + .data + .bootloader)
+
+Data:        240 bytes (93.8% Full)
+(.data + .bss + .noinit)
+
+
+Finished building: sizedummy
+ 
+
+23:44:22 Build Finished. 0 errors, 2 warnings. (took 669ms)
+

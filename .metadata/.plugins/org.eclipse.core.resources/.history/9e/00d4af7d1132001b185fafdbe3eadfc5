@@ -1,0 +1,405 @@
+#include "main.h"
+
+//Fuses: -U lfuse:w:0xee:m -U hfuse:w:0xd9:m -U efuse:w:0xff:m 
+
+bool ctrlState = 0;
+bool shiftState = 0;
+bool altState = 0;
+bool superState = 0;
+bool fModState = 0;
+
+int main() {
+	uchar i;
+	bool updateNeeded = false;
+	/*
+	 Pin descriptions
+	 PB0..PB7 Keyboard Matrix
+	 PD0 Test Point 1
+	 PD1 Test Point 2
+	 PD2 D+
+	 PD3 D-
+	 */
+	DDRB = 0x00; //Set PortB as input
+	DDRD = ~USBMASK; //Set All pins as output Except USB
+
+	for (i = 0; i < sizeof(keyboard_report); i++) { // clear report initially
+		((uchar*) &keyboard_report)[i] = 0;
+	}
+
+	wdt_enable(WDTO_1S); // enable 1s watchdog timer
+
+	usbInit();
+
+	usbDeviceDisconnect(); // enforce re-enumeration
+	for (i = 0; i < 250; i++) { // wait 500 ms
+		wdt_reset(); // keep the watchdog happy
+		_delay_ms(2);
+	}
+	usbDeviceConnect();
+
+	TCCR0B |= (1 << CS01); // timer 0 at clk/8 will generate randomness
+
+	sei(); // Enable interrupts after re-enumeration
+
+	//dbg_tx_init(); //Enable UART TX interface
+
+	serial_init();
+	print("Boot!\n\r", 7);
+
+	while (1) {
+		wdt_reset(); // keep the watchdog happy
+		usbPoll();
+		if(connected) updateNeeded = readPort();
+		if(updateNeeded) print("fuck",4);
+		/* If an update is needed, send the report */
+		if (updateNeeded && usbInterruptIsReady() && connected) {
+			updateNeeded = 0;
+			usbSetInterrupt((void*) &keyboard_report, sizeof(keyboard_report));
+
+			while(!usbInterruptIsReady()){
+				wdt_reset(); // keep the watchdog happy
+				usbPoll();
+			}
+			for (int i = 0; i < 6; i++) {
+							if (keyboard_report.keycode[i]) {
+								keyboard_report.keycode[i] = 0;
+							}
+						}
+						keyboard_report.modifier = 0;
+			usbSetInterrupt((void*) &keyboard_report, sizeof(keyboard_report));
+		}
+
+		if (!connected) {
+			if (counter++ == 10000) {
+				PORTD ^= (1 << PORTD5); //Flash LED
+				counter = 0;
+			}
+		}
+	}
+
+	return 0;
+}
+
+bool readPort() {
+
+	byte portState = PINB;
+	bool trigger = (portState & (1));
+	if (!trigger && !readed) {
+
+		bool ctrl = !(portState & (1 << PINB1));
+		bool shft = !(portState & (1 << PINB2));
+		bool othr = !(portState & (1 << PINB3));
+		byte all = ctrl * 4 + shft * 2 + othr * 1;
+		//byte all =  ~(PINB >> 1) & 0x07;
+		byte key = swapnibble((portState & 0xF0) >> 4);
+		//key = swapByte(key);
+		//byte key = (PINB & 0xF0) >> 4;
+		if (ctrl) {
+			print("CTRL ", 5);
+		} else {
+			print("     ", 5);
+		}
+		if (shft) {
+			print("SHFT ", 5);
+		} else {
+			print("     ", 5);
+		}
+		if (othr) {
+			print("OTHR ", 5);
+		} else {
+			print("     ", 5);
+		}
+		print("PORTB: ", 7);
+		printBin(portState, 8);
+		//Serial.print(" CHAR: ");
+		//Serial.print((portState&B00011111 + 64));
+		print(" ALL: ", 6);
+		printBin(all, 8);
+		print(" KEY: ", 6);
+		printBin(key, 8);
+		print("\n\r", 2);
+
+		return parseKey(all, key);
+		readed = true;
+	}
+	if (trigger && readed) {
+		readed = false;
+	}
+	return false;
+}
+
+bool parseKey(byte table, byte key) {
+	byte output = 0;
+	//Logic is fucked for some reason...
+	switch (table) {
+	case 0:
+		//lower case upper
+		if (key > 10 && !fModState) shiftState = true;
+		output = fModState ? pgm_read_byte(&FLowr2[key]) : pgm_read_byte(&Lowr2[key]);
+		if (key == 15) {
+			ctrlState = !ctrlState;
+			output = 0xff;
+		}
+		break;
+	case 1:
+		//lower case lower
+		output =
+				fModState ?
+						pgm_read_byte(&FLowr1[key]) :
+						pgm_read_byte(&Lowr1[key]);
+		break;
+	case 2:
+		//higher case upper
+		shiftState = true;
+		if (key > 10 && !fModState) shiftState = false;
+		output =
+				fModState ?
+						pgm_read_byte(&FUppr2[key]) :
+						pgm_read_byte(&Uppr2[key]);
+		break;
+	case 3:
+		//higher case lower
+		print(" HighL", 6);
+		shiftState = true;
+		output =
+				fModState ?
+						pgm_read_byte(&FUppr1[key]) :
+						pgm_read_byte(&Uppr1[key]);
+		break;
+	case 4:
+		//numbers
+		shiftState = false;
+		if ((key == 10 || key == 12 || key >= 14) && !fModState)
+			shiftState = true;
+		output =
+				fModState ?
+						pgm_read_byte(&FNumbr[key]) :
+						pgm_read_byte(&Numbr[key]);
+		break;
+	case 5:
+		//symbols
+		shiftState = true;
+		if ((key == 0 || key == 7 || key >= 12) && !fModState)
+			shiftState = false;
+		output =
+				fModState ?
+						pgm_read_byte(&FSymbl[key]) :
+						pgm_read_byte(&Symbl[key]);
+		break;
+	case 6:
+		//Ctrl Num and Ctrl Letter upper and special keys
+		shiftState = false;
+		output =
+				fModState ?
+						pgm_read_byte(&FCtrl1[key]) :
+						pgm_read_byte(&Ctrl1[key]);
+		if (key == 0) {
+			superState = !superState;
+			output = 0xff;
+		} else if (key == 12) {
+			fModState = !fModState;
+			output = 0xff;
+		}
+		break;
+	case 7:
+		//Ctrl Shift num and Ctrl Letter lower and special keys
+		shiftState = false;
+		output =
+				fModState ?
+						pgm_read_byte(&FCtrl2[key]) :
+						pgm_read_byte(&Ctrl2[key]);
+		if (key == 1) {
+			shiftState = !shiftState;
+			output = 0xff;
+		} else if (key == 4) {
+			altState = !altState;
+			output = 0xff;
+		} else if (key == 5) {
+		}
+		break;
+	default:
+		print(" NoKey", 6);
+		break;
+	}
+
+	if (superState) {
+		keyboard_report.modifier += LEFT_GUI;
+	}
+
+	if (ctrlState) {
+		keyboard_report.modifier += LEFT_CTRL;
+	}
+
+	if (shiftState) {
+		keyboard_report.modifier += LEFT_SHIFT;
+	}
+
+	if (altState) {
+		keyboard_report.modifier += LEFT_ALT;
+	}
+	if (output != 0xFF) {
+		ctrlState = 0;
+		shiftState = 0;
+		altState = 0;
+		superState = 0;
+		fModState = 0;
+	}
+
+	if (output != 0x00 && output != 0xFF) {
+		for (int i = 0; i < 6; i++) {
+			if (keyboard_report.keycode[i] == 0) {
+				keyboard_report.keycode[i] = output;
+				return true;
+			}
+		}
+		connected = false;
+		return false;
+	}
+	return false;
+
+}
+
+/////////////////////////////////////
+///////   SERIAL FUNCTIONS   ////////
+/////////////////////////////////////
+
+void serial_init() {
+	// initialize USART
+	UBRRL = UBRR_VALUE & 255;
+	UBRRH = UBRR_VALUE >> 8;
+	UCSRB = ((1 << TXEN) | (1 << RXEN) | (1 << RXCIE)); // fire-up USART
+	UCSRC = (1 << UCSZ1) | (1 << UCSZ0); // fire-up USART
+	serial_send(0);
+	serial_send('\n');
+	serial_send('\r');
+	serial_send(0);
+}
+
+void serial_send(byte data) {
+	// send a single character via USART
+	while (!(UCSRA & (1 << UDRE))) {
+	}; //wait while previous byte is completed
+	UDR = data; // Transmit data
+}
+
+uint8_t USART_ReceiveByte() {
+	while ((UCSRA & (1 << RXC)) == 0)
+		;
+	return UDR;
+}
+
+bool serialAvailible() {
+	return (UCSRA & (1 << RXC));
+}
+
+void print(char *text, uint len) {
+	for (uint i = 0; i <= len; i++) {
+		serial_send(text[i]);
+	}
+	serial_send(0);
+}
+
+void printBin(byte text, uint len) {
+	for (uint i = 0; i < len; i++)
+		print((text & 0x1 << i) ? "1" : "0", 1);
+}
+
+//ISR(USART_RX_vect){RXSerialBuf = UDR}
+
+/////////////////////////////////////
+///////    HELP FUNCTIONS    ////////
+/////////////////////////////////////
+
+byte swapnibble(byte nib) {
+	bool A = nib & (1 << 0);
+	bool B = nib & (1 << 1);
+	bool C = nib & (1 << 2);
+	bool D = nib & (1 << 3);
+	return D * 1 + C * 2 + B * 4 + A * 8;
+}
+
+byte swapByte(byte b) {
+	b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+	b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+	b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+	return b;
+}
+
+////////////////////////////////////
+///////    USB FUNCTIONS    ////////
+////////////////////////////////////
+
+usbMsgLen_t usbFunctionSetup(uchar data[8]) {
+	usbRequest_t *rq = (void*) data;
+	print("rec",3);
+	if ((rq->bmRequestType & USBRQ_TYPE_MASK) == USBRQ_TYPE_CLASS) {
+		switch (rq->bRequest) {
+		case USBRQ_HID_GET_REPORT: // send keys pressed if asked here
+			// wValue: ReportType (highbyte), ReportID (lowbyte)
+			usbMsgPtr = (void*) &keyboard_report; // we only have this one
+			return sizeof(keyboard_report);
+		case USBRQ_HID_SET_REPORT: // if wLength == 1, should be LED state
+			return (rq->wLength.word == 1) ? USB_NO_MSG : 0;
+		case USBRQ_HID_GET_IDLE: // send idle rate to PC as required by spec
+			usbMsgPtr = &idleRate;
+			return 1;
+		case USBRQ_HID_SET_IDLE: // save idle rate as required by spec
+			idleRate = rq->wValue.bytes[1];
+			return 0;
+		case USBRQ_HID_GET_PROTOCOL:
+			protocolVer = rq->wValue.bytes[1];
+			return 0;
+		case USBRQ_HID_SET_PROTOCOL:
+			usbMsgPtr = &protocolVer;
+			return 1;
+		}
+	}
+
+	return 0; // by default don't return any data
+}
+
+usbMsgLen_t usbFunctionWrite(uint8_t *data, uchar len) {
+	connected = true;
+
+	if (data[0] == LED_state)
+		return 1;
+	else
+		LED_state = data[0];
+
+	// LED state changed
+	if (LED_state & NUM_LOCK) {
+		PORTD |= (1 << PORTD5);
+	} else {
+		PORTD &= ~(1 << PORTD5);
+	}
+
+	if (LED_state & CAPS_LOCK) {
+		PORTD |= (1 << PORTD6);
+	} else {
+		PORTD &= ~(1 << PORTD6);
+	}
+
+	if (LED_state & SCROLL_LOCK) {
+		PORTD |= (1 << PORTD4);
+	} else {
+		PORTD &= ~(1 << PORTD4);
+	}
+
+	if (LED_state & COMPOSE) {
+
+	} else {
+
+	}
+	if (LED_state & KANA) {
+
+	} else {
+
+	}
+	if (LED_state & SHIFT) {
+
+	} else {
+
+	}
+
+	return 1; // Data read, not expecting more
+}
